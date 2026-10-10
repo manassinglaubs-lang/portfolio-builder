@@ -94,6 +94,14 @@ with st.sidebar:
     st.title("⚙️ Settings")
     st.caption("Everything is pre-set. Change the three goal boxes first, then experiment if you like.")
 
+    st.markdown("**📂 Data file**")
+    up = st.file_uploader("Upload your own CSV (optional)", type="csv")
+    st.markdown("<div class='note'>⚠️ Upload a <b>.csv</b> file with the <b>same columns as the demo file</b>. "
+                "Otherwise the demo data is used.</div>", unsafe_allow_html=True)
+    if Path("stock_data.csv").exists():
+        st.download_button("⬇️ Download demo file (for format)", Path("stock_data.csv").read_bytes(),
+                           "demo_stock_data.csv", "text/csv")
+
     with st.expander("💰 Your goal", expanded=True):
         CAPITAL = st.number_input("1. How much money do you have? (₹)", value=10_000_000,
                                   step=100_000, min_value=10_000)
@@ -112,14 +120,6 @@ with st.sidebar:
         st.caption(f"Needs about **{T_LOW ** (1 / YEARS) - 1:.0%} growth per year**.")
         if YEARS < 3:
             st.warning("Stocks can fall a lot over short periods. Under 3 years, results are very uncertain.")
-
-    st.markdown("**📂 Data file**")
-    up = st.file_uploader("Upload your own CSV (optional)", type="csv")
-    st.markdown("<div class='note'>⚠️ Upload a <b>.csv</b> file with the <b>same columns as the demo file</b>. "
-                "Otherwise the demo data is used.</div>", unsafe_allow_html=True)
-    if Path("stock_data.csv").exists():
-        st.download_button("⬇️ Download demo file (for format)", Path("stock_data.csv").read_bytes(),
-                           "demo_stock_data.csv", "text/csv")
 
     preset = st.selectbox("Investment style", list(PRESETS),
                           help="Decides how much each factor matters when ranking stocks.")
@@ -616,4 +616,4 @@ with tabs[6]:
                      ).to_excel(xw, sheet_name="Insights", index=False)
     st.download_button("⬇️ Download Excel report", buf.getvalue(), "Portfolio_Report.xlsx",
                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
-    st.caption("Educational tool. Not investment advice. Past performance does not guarantee future results.")
+    st.caption("Educational tool. Not investment advice. Past performance does not guarantee future results.")   
