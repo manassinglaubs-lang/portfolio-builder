@@ -65,7 +65,7 @@ PRESETS = {
     "Balanced": {"Growth": 20, "Profitability": 20, "Size": 15, "Valuation": 20, "Risk": 15, "Technical": 10},
     "Safety-first": {"Growth": 15, "Profitability": 20, "Size": 20, "Valuation": 10, "Risk": 30, "Technical": 5},
     "Custom": None}
-info = {"Growth": ("🚀 Growth", "Sales and profit growth", "We need 26–29% a year, so growth matters most."),
+info = {"Growth": ("🚀 Growth", "Sales and profit growth", "Fast growth is what lifts returns towards a high goal."),
         "Profitability": ("💪 Quality", "ROE and ROCE", "Checks that growth is profitable and lasting."),
         "Size": ("🏢 Size", "Company market value", "Bigger firms are more stable and easier to trade."),
         "Valuation": ("🏷️ Price", "P/E, PEG, P/B", "Stops us overpaying for growth."),
@@ -92,11 +92,30 @@ GLOSSARY = {
 # ============================================================ SIDEBAR
 with st.sidebar:
     st.title("⚙️ Settings")
-    st.caption("Everything is pre-set. Open a section only if you want to experiment.")
+    st.caption("Everything is pre-set. Change the three goal boxes first, then experiment if you like.")
+
+    with st.expander("💰 Your goal", expanded=True):
+        CAPITAL = st.number_input("1. How much money do you have? (₹)", value=10_000_000,
+                                  step=100_000, min_value=10_000)
+        TARGET = st.number_input("2. How much do you want it to become? (₹)", value=20_000_000,
+                                 step=100_000, min_value=10_000)
+        d1, d2 = st.columns([2, 1])
+        dur = d1.number_input("3. In how long?", value=3, min_value=1, step=1)
+        unit = d2.selectbox("Unit", ["Years", "Months"])
+        YEARS = dur if unit == "Years" else dur / 12
+        MONTHS = max(1, int(round(YEARS * 12)))
+        DUR_TXT = f"{dur} {unit[:-1] if dur == 1 else unit}".lower()
+        if TARGET <= CAPITAL:
+            st.error("Your target must be more than the money you start with.")
+            st.stop()
+        T_LOW = TARGET / CAPITAL
+        st.caption(f"Needs about **{T_LOW ** (1 / YEARS) - 1:.0%} growth per year**.")
+        if YEARS < 3:
+            st.warning("Stocks can fall a lot over short periods. Under 3 years, results are very uncertain.")
 
     st.markdown("**📂 Data file**")
     up = st.file_uploader("Upload your own CSV (optional)", type="csv")
-    st.markdown(f"<div class='note'>⚠️ Upload a <b>.csv</b> file with the <b>same columns as the demo file</b>. "
+    st.markdown("<div class='note'>⚠️ Upload a <b>.csv</b> file with the <b>same columns as the demo file</b>. "
                 "Otherwise the demo data is used.</div>", unsafe_allow_html=True)
     if Path("stock_data.csv").exists():
         st.download_button("⬇️ Download demo file (for format)", Path("stock_data.csv").read_bytes(),
@@ -112,10 +131,6 @@ with st.sidebar:
                    "Safety {Risk}% · Trend {Technical}%".format(**wraw))
     W = {k: v / (sum(wraw.values()) or 1) for k, v in wraw.items()}
 
-    with st.expander("💰 Money and target"):
-        CAPITAL = st.number_input("Starting money (Rs)", value=10_000_000, step=500_000)
-        T_LOW = st.number_input("Target, low (x your money)", value=2.00, step=0.05)
-        T_HIGH = st.number_input("Target, high (x your money)", value=2.15, step=0.05)
     with st.expander("📏 Stock quality rules"):
         MIN_ROE = st.number_input("Minimum ROE %", value=15.0)
         MIN_ROCE = st.number_input("Minimum ROCE % (not for banks)", value=15.0)
@@ -145,8 +160,6 @@ with st.sidebar:
         term = st.selectbox("Look up a term", list(GLOSSARY))
         st.info(GLOSSARY[term])
         st.caption("For education only. Not investment advice.")
-
-YEARS = 3
 
 # ============================================================ DATA
 def prepare(d):
@@ -245,8 +258,8 @@ def get_cov(tickers):
         return None
 
 @st.cache_data
-def simulate(mu, sigma, capital, years=3, n=5000, seed=42):
-    rng = np.random.default_rng(seed); steps = years * 12
+def simulate(mu, sigma, capital, years, n=5000, seed=42):
+    rng = np.random.default_rng(seed); steps = max(1, int(round(years * 12)))
     drift = (np.log(1 + mu) - 0.5 * sigma ** 2) / 12
     z = rng.standard_normal((n, steps))
     return capital * np.exp(np.cumsum(drift + sigma / np.sqrt(12) * z, axis=1))
@@ -292,15 +305,15 @@ else:
 w_ = port.Weight.values
 SIGMA = float(np.sqrt(w_ @ cov @ w_))
 P_BETA = float((port.Weight * port.Beta).sum())
-REQ_LOW, REQ_HIGH = T_LOW ** (1 / YEARS) - 1, T_HIGH ** (1 / YEARS) - 1
+REQ_LOW = T_LOW ** (1 / YEARS) - 1
 
 rows = []
 for name, (desc, m) in SCEN.items():
-    f = simulate(m, SIGMA, CAPITAL)[:, -1]
+    f = simulate(m, SIGMA, CAPITAL, YEARS)[:, -1]
     rows.append({"Scenario": name, "Assumption": desc, "Yearly return": m,
                  "Typical outcome": np.median(f), "Bad case": np.percentile(f, 10),
                  "Good case": np.percentile(f, 90),
-                 "Chance of reaching target": float(np.mean(f >= T_LOW * CAPITAL))})
+                 "Chance of reaching target": float(np.mean(f >= TARGET))})
 res = pd.DataFrame(rows)
 mid_prob = float(res.loc[res.Scenario == "Realistic", "Chance of reaching target"].iloc[0])
 if mid_prob < .20: vtxt, vcol, vicon = "Unlikely", RED, "🔴"
@@ -316,7 +329,7 @@ def build_insights():
     out = []
     wa = lambda c: float((port.Weight * port[c].fillna(0)).sum() / port.Weight.sum())
     exp_real = SCEN["Realistic"][1]
-    f_real = simulate(exp_real, SIGMA, CAPITAL)[:, -1]
+    f_real = simulate(exp_real, SIGMA, CAPITAL, YEARS)[:, -1]
     p_loss = float(np.mean(f_real < CAPITAL))
     out.append(("🎯", "Goal vs reality",
         f"The goal needs about <b>{REQ_LOW:.0%} a year</b>. In the realistic case this portfolio is expected to earn "
@@ -348,7 +361,7 @@ def build_insights():
     out.append(("🎢", "Risk",
         f"Market sensitivity (beta) is <b>{P_BETA:.2f}</b> ({beta_label(P_BETA).lower()}) and yearly swings are about "
         f"<b>±{SIGMA:.0%}</b>. In a bad case (1 in 10), the portfolio could be worth about <b>{money(p10)}</b> "
-        "after 3 years.", RED))
+        f"after {DUR_TXT}.", RED))
     notes = []
     neg = port[port["NI_Growth_%"] < 0].Company.tolist()
     hib = port[port.Beta >= 1.4].Company.tolist()
@@ -361,7 +374,7 @@ def build_insights():
 
 # ============================================================ HEADER + TABS (pipeline order)
 st.markdown(f"""<div class="hero"><h1>📈 Smart Portfolio Builder</h1>
-<p>Turning {money(CAPITAL)} into {money(T_LOW*CAPITAL)}–{money(T_HIGH*CAPITAL)} in {YEARS} years:
+<p>Turning {money(CAPITAL)} into {money(TARGET)} in {DUR_TXT}:
 how stocks are chosen, how money is split, and whether the goal is realistic.</p></div>""",
             unsafe_allow_html=True)
 
@@ -372,17 +385,17 @@ tabs = st.tabs(["🏁 Overview", "🔎 Stocks", "📏 Stock quality rules", "�
 with tabs[0]:
     c = st.columns(4)
     c[0].markdown(card("Starting money", money(CAPITAL), "invested today", BLUE), unsafe_allow_html=True)
-    c[1].markdown(card("Goal in 3 years", f"{money(T_LOW*CAPITAL)} – {money(T_HIGH*CAPITAL)}",
-                       f"{T_LOW:.2f}x to {T_HIGH:.2f}x your money", GREEN), unsafe_allow_html=True)
-    c[2].markdown(card("Growth needed", f"{REQ_LOW:.0%} – {REQ_HIGH:.0%} / year",
+    c[1].markdown(card(f"Goal in {DUR_TXT}", money(TARGET), f"{T_LOW:.2f}x your money", GREEN),
+                  unsafe_allow_html=True)
+    c[2].markdown(card("Growth needed", f"{REQ_LOW:.0%} / year",
                        "Indian stocks have averaged roughly 12–15%", AMBER), unsafe_allow_html=True)
     c[3].markdown(card("Risk level", beta_label(P_BETA), f"swings about ±{SIGMA:.0%} a year", RED),
                   unsafe_allow_html=True)
     st.markdown(f"""<div class="verdict" style="border-color:{vcol}">
-    <div style="font-size:1.2rem;font-weight:700">{vicon} Reaching {money(T_LOW*CAPITAL)}: {vtxt}
+    <div style="font-size:1.2rem;font-weight:700">{vicon} Reaching {money(TARGET)}: {vtxt}
     ({mid_prob:.0%} chance in the realistic case)</div>
-    <div style="color:#475569;margin-top:4px">The goal needs a return well above normal market returns, so even a
-    carefully chosen portfolio reaches it only if things go better than average. See the tab
+    <div style="color:#475569;margin-top:4px">A goal that needs a return well above normal market returns is reached
+    only if things go better than average, however carefully the stocks are chosen. See the tab
     "Possibility of hitting target" for details.</div></div>""", unsafe_allow_html=True)
 
     st.markdown("### How this tool works (follow the tabs left to right)")
@@ -398,13 +411,11 @@ with tabs[0]:
         col.markdown(f'<div class="step"><b>{t}</b><br>{d}</div>', unsafe_allow_html=True)
 
     st.markdown("### Growth path needed to reach the goal")
-    yrs = np.arange(0, YEARS + 1)
+    mths = np.arange(0, MONTHS + 1)
     fig = go.Figure()
-    fig.add_scatter(x=yrs, y=CAPITAL * (1 + REQ_LOW) ** yrs / 1e7, name=f"To reach {T_LOW:.2f}x",
-                    line=dict(color=BLUE, width=4))
-    fig.add_scatter(x=yrs, y=CAPITAL * (1 + REQ_HIGH) ** yrs / 1e7, name=f"To reach {T_HIGH:.2f}x",
-                    line=dict(color=GREEN, width=4))
-    fig.update_layout(height=330, xaxis_title="Years from now", yaxis_title="Value (₹ crore)",
+    fig.add_scatter(x=mths, y=CAPITAL * (1 + REQ_LOW) ** (mths / 12) / 1e7,
+                    name="Growth needed to hit the goal", line=dict(color=BLUE, width=4))
+    fig.update_layout(height=330, xaxis_title="Months from now", yaxis_title="Value (₹ crore)",
                       margin=dict(t=10), legend=dict(orientation="h", y=1.1))
     st.plotly_chart(fig, use_container_width=True)
 
@@ -535,7 +546,7 @@ with tabs[5]:
         "Bad case": st.column_config.NumberColumn("Bad case (1 in 10)", format="₹%.0f"),
         "Good case": st.column_config.NumberColumn("Good case (1 in 10)", format="₹%.0f"),
         "Chance of reaching target": st.column_config.ProgressColumn(
-            f"Chance of reaching {T_LOW:.2f}x", min_value=0, max_value=1, format="percent")})
+            f"Chance of reaching {money(TARGET)}", min_value=0, max_value=1, format="percent")})
     cc = st.columns(3)
     for col, (nm, (_, m)), accent in zip(cc, SCEN.items(), [AMBER, BLUE, GREEN]):
         pr = float(res.loc[res.Scenario == nm, "Chance of reaching target"].iloc[0])
@@ -543,7 +554,7 @@ with tabs[5]:
         col.markdown(card(nm, f"{pr:.0%} chance", f"typical result {money(med)}", accent), unsafe_allow_html=True)
     st.write("")
     pick = st.radio("Show the range of outcomes for:", list(SCEN), index=1, horizontal=True)
-    p = simulate(SCEN[pick][1], SIGMA, CAPITAL) / 1e7
+    p = simulate(SCEN[pick][1], SIGMA, CAPITAL, YEARS) / 1e7
     q = {k: np.percentile(p, k, axis=0) for k in (10, 25, 50, 75, 90)}
     mo = np.arange(1, p.shape[1] + 1)
     fig = go.Figure()
@@ -554,18 +565,18 @@ with tabs[5]:
     fig.add_scatter(x=mo, y=q[25], fill="tonexty", line=dict(width=0), name="Middle half of futures",
                     fillcolor="rgba(11,95,255,.30)")
     fig.add_scatter(x=mo, y=q[50], name="Typical path", line=dict(color=BLUE, width=4))
-    fig.add_hline(y=T_LOW * CAPITAL / 1e7, line_dash="dash", line_color=GREEN, annotation_text="Goal (low)")
-    fig.add_hline(y=T_HIGH * CAPITAL / 1e7, line_dash="dash", line_color=RED, annotation_text="Goal (high)")
+    fig.add_hline(y=TARGET / 1e7, line_dash="dash", line_color=GREEN, annotation_text="Your goal")
     fig.update_layout(height=430, xaxis_title="Months from now", yaxis_title="Portfolio value (₹ crore)",
                       legend=dict(orientation="h", y=1.12))
     st.plotly_chart(fig, use_container_width=True)
     fig = px.histogram(x=p[:, -1], nbins=60, color_discrete_sequence=[GREEN],
-                       labels={"x": "Value after 3 years (₹ crore)"}, title="Where we could end up after 3 years")
-    fig.add_vline(x=T_LOW * CAPITAL / 1e7, line_dash="dash", line_color=RED)
+                       labels={"x": f"Value after {DUR_TXT} (₹ crore)"},
+                       title=f"Where we could end up after {DUR_TXT}")
+    fig.add_vline(x=TARGET / 1e7, line_dash="dash", line_color=RED)
     st.plotly_chart(fig, use_container_width=True)
     best = res["Typical outcome"].max()
     st.markdown(f"<div class='note'><b>In plain words:</b> the best typical result across scenarios is "
-                f"{money(best)}, against a goal of {money(T_LOW*CAPITAL)}–{money(T_HIGH*CAPITAL)}. {cov_note} "
+                f"{money(best)}, against a goal of {money(TARGET)}. {cov_note} "
                 "The simulation ignores taxes, trading costs and rebalancing, and past performance does not "
                 "guarantee future results.</div>", unsafe_allow_html=True)
 
@@ -573,8 +584,8 @@ with tabs[5]:
 with tabs[6]:
     st.subheader("Summary and key insights")
     st.markdown(f"""<div class="verdict" style="border-color:{vcol}">
-    <div style="font-size:1.15rem;font-weight:700">{vicon} Bottom line: reaching {money(T_LOW*CAPITAL)} in
-    {YEARS} years is <u>{vtxt.lower()}</u> ({mid_prob:.0%} chance, realistic case).</div>
+    <div style="font-size:1.15rem;font-weight:700">{vicon} Bottom line: reaching {money(TARGET)} in
+    {DUR_TXT} is <u>{vtxt.lower()}</u> ({mid_prob:.0%} chance, realistic case).</div>
     <div style="color:#475569;margin-top:4px">From {len(raw)} companies, {int(ranked.Screen_Pass.sum())} passed all
     quality rules. We picked {len(port)} stocks across {port.Sector.nunique()} industries, split
     {BUCKET_ALLOC['Large']:.0%} large, {BUCKET_ALLOC['Mid']:.0%} mid and {BUCKET_ALLOC['Small']:.0%} small-cap.
