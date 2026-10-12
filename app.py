@@ -46,6 +46,11 @@ button[data-baseweb="tab"] {{font-weight:600; font-size:.95rem;}}
 button[data-baseweb="tab"][aria-selected="true"] {{color:{GREEN};}}
 div[data-baseweb="tab-highlight"] {{background-color:{GREEN} !important;}}
 section[data-testid="stSidebar"] {{border-right:1px solid #E3E8F0;}}
+section[data-testid="stSidebar"] [data-testid="stSidebarHeader"] {{padding:0.4rem 1rem 0 1rem; min-height:2rem; height:2rem;}}
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {{padding-top:0.2rem;}}
+section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {{gap:0.6rem;}}
+section[data-testid="stSidebar"] h2 {{padding-top:0; margin-top:0;}}
+section[data-testid="stSidebar"] div[data-testid="stExpander"] {{margin:0;}}
 </style>""", unsafe_allow_html=True)
 
 def card(label, value, sub="", accent=BLUE):
@@ -91,19 +96,29 @@ GLOSSARY = {
     "Diversification": "Spreading money across many stocks and industries so one bad stock hurts less."}
 
 # ============================================================ SIDEBAR
+def apply_preset():
+    p = PRESETS.get(st.session_state.get("preset"))
+    if p:
+        for k, v in p.items():
+            st.session_state[f"w_{k}"] = v
+
+for _k, _v in PRESETS["Recommended: growth-focused"].items():
+    st.session_state.setdefault(f"w_{_k}", _v)
+st.session_state.setdefault("preset", "Recommended: growth-focused")
+
 with st.sidebar:
-    st.title("⚙️ Settings")
-    st.caption("Everything is pre-set. Change the three goal boxes first, then experiment if you like.")
+    st.markdown("## ⚙️ Settings")
+    st.caption("Sections are closed to keep things tidy. Open one to change it. Start with Your goal.")
 
-    st.markdown("**📂 Data file**")
-    up = st.file_uploader("Upload your own CSV (optional)", type="csv")
-    st.markdown("<div class='note'>⚠️ Upload a <b>.csv</b> file with the <b>same columns as the demo file</b>. "
-                "Otherwise the demo data is used.</div>", unsafe_allow_html=True)
-    if Path("stock_data.csv").exists():
-        st.download_button("⬇️ Download demo file (for format)", Path("stock_data.csv").read_bytes(),
-                           "demo_stock_data.csv", "text/csv")
+    with st.expander("📂 Data file"):
+        up = st.file_uploader("Upload your own CSV (optional)", type="csv")
+        st.markdown("<div class='note'>⚠️ Upload a <b>.csv</b> file with the <b>same columns as the demo file</b>. "
+                    "Otherwise the demo data is used.</div>", unsafe_allow_html=True)
+        if Path("stock_data.csv").exists():
+            st.download_button("⬇️ Download demo file (for format)", Path("stock_data.csv").read_bytes(),
+                               "demo_stock_data.csv", "text/csv")
 
-    with st.expander("💰 Your goal", expanded=True):
+    with st.expander("💰 Your goal"):
         CAPITAL = st.number_input("1. How much money do you have? (₹)", value=10_000_000,
                                   step=100_000, min_value=10_000)
         TARGET = st.number_input("2. How much do you want it to become? (₹)", value=20_000_000,
@@ -122,15 +137,10 @@ with st.sidebar:
         if YEARS < 3:
             st.warning("Stocks can fall a lot over short periods. Under 3 years, results are very uncertain.")
 
-    preset = st.selectbox("Investment style", list(PRESETS),
-                          help="Decides how much each factor matters when ranking stocks.")
-    if preset == "Custom":
-        wraw = {k: st.slider(info[k][0], 0, 50, v) for k, v in PRESETS["Recommended: growth-focused"].items()}
-    else:
-        wraw = PRESETS[preset]
-        st.caption("Growth {Growth}% · Quality {Profitability}% · Size {Size}% · Price {Valuation}% · "
-                   "Safety {Risk}% · Trend {Technical}%".format(**wraw))
-    W = {k: v / (sum(wraw.values()) or 1) for k, v in wraw.items()}
+    with st.expander("🎨 Investment style"):
+        preset = st.selectbox("Choose a style", list(PRESETS), key="preset", on_change=apply_preset,
+                              help="Picking a style sets the weights in 'Weightage to parameters'. You can fine-tune them after.")
+        st.caption("Recommended = growth-focused. Balanced = even mix. Safety-first = protects against falls.")
 
     with st.expander("📏 Stock quality rules"):
         MIN_ROE = st.number_input("Minimum ROE %", value=15.0)
@@ -139,7 +149,18 @@ with st.sidebar:
         G_MIDSMALL = st.number_input("Minimum sales growth % (Mid/Small)", value=15.0)
         MAX_BETA = st.number_input("Maximum beta", value=1.5)
         MAX_SECTOR = st.number_input("Max stocks from one industry", value=3, step=1)
-    with st.expander("🧩 Money split by company size", expanded=True):
+
+    with st.expander("⚖️ Weightage to parameters"):
+        wraw = {k: st.slider(info[k][0], 0, 50, key=f"w_{k}") for k in info}
+        tot_w = sum(wraw.values())
+        W = {k: v / (tot_w or 1) for k, v in wraw.items()}
+        st.caption(f"Total: {tot_w}% (scaled to 100% automatically)")
+        same = PRESETS.get(preset) == wraw
+        style_label = preset if same else "Custom (your own weights)"
+        if not same:
+            st.caption("You are using custom weights.")
+
+    with st.expander("🧩 Money split by company size"):
         a_l = st.slider("Large-cap %", 0, 100, 30, help="Biggest, most stable companies")
         a_m = st.slider("Mid-cap %", 0, 100, 40, help="Faster growth, moderate risk")
         a_s = st.slider("Small-cap %", 0, 100, 30, help="Highest growth potential, highest risk")
@@ -153,6 +174,7 @@ with st.sidebar:
         if max(BUCKET_ALLOC.values()) > 5 * MAX_STOCK:
             st.warning("One size group has more money than 5 stocks can hold under the cap, "
                        "so the cap may be exceeded. Raise the cap or rebalance the split.")
+
     with st.expander("📐 Return assumptions"):
         RF = st.number_input("Safe return, e.g. govt bonds %", value=7.0) / 100
         ERP = st.number_input("Extra return expected from stocks %", value=7.0) / 100
@@ -474,7 +496,7 @@ with tabs[2]:
                 unsafe_allow_html=True)
 
     st.markdown("### What matters when scoring? (factor weights)")
-    explain(f"Each factor gets a share of 100%. Current style: <b>{preset}</b>. Change it in the left panel.")
+    explain(f"Each factor gets a share of 100%. Current style: <b>{style_label}</b>. Change it in the left panel.")
     wt = pd.DataFrame({"Factor": [info[k][0] for k in W], "Measured by": [info[k][1] for k in W],
                        "Weight %": [round(v * 100, 1) for v in W.values()],
                        "Why it matters": [info[k][2] for k in W]})
