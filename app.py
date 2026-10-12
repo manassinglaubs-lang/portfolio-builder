@@ -87,6 +87,7 @@ GLOSSARY = {
     "RSI": "A 0–100 momentum gauge. Above 70 can mean overheated; below 30 can mean oversold.",
     "CAGR": "Average yearly growth rate. Doubling in 3 years needs about 26% a year.",
     "Monte Carlo simulation": "Running thousands of random 'what if' futures to see how often the goal is reached.",
+    "Nifty 50": "India's main stock-market index. We compare the portfolio with it to see if we beat the market.",
     "Diversification": "Spreading money across many stocks and industries so one bad stock hurts less."}
 
 # ============================================================ SIDEBAR
@@ -257,6 +258,15 @@ def get_cov(tickers):
     except Exception:
         return None
 
+@st.cache_data(ttl=900, show_spinner="Fetching latest prices...")
+def get_history(tickers, start):
+    try:
+        import yfinance as yf
+        h = yf.download(list(tickers) + ["^NSEI"], start=start, auto_adjust=True, progress=False)["Close"]
+        return h.dropna(how="all")
+    except Exception:
+        return None
+
 @st.cache_data
 def simulate(mu, sigma, capital, years, n=5000, seed=42):
     rng = np.random.default_rng(seed); steps = max(1, int(round(years * 12)))
@@ -379,7 +389,7 @@ how stocks are chosen, how money is split, and whether the goal is realistic.</p
             unsafe_allow_html=True)
 
 tabs = st.tabs(["🏁 Overview", "🔎 Stocks", "📏 Stock quality rules", "🏆 Ranking",
-                "💼 Portfolio", "🎯 Possibility of hitting target", "📝 Summary and insights"])
+                "💼 Portfolio", "📈 Live tracker", "🎯 Possibility of hitting target", "📝 Summary and insights"])
 
 # ------------------------------------------------------------ 1. OVERVIEW
 with tabs[0]:
@@ -404,11 +414,14 @@ with tabs[0]:
              ("3. Quality rules", "Filters that remove weak companies, plus factor weights."),
              ("4. Ranking", "Every company scored 0–100; best 5 per size group picked."),
              ("5. Portfolio", "Money split across the 15 stocks."),
-             ("6. Possibility", "Simulation of whether the goal can be reached."),
-             ("7. Summary", "Key insights and the Excel download.")]
-    sc = st.columns(7)
-    for col, (t, d) in zip(sc, steps):
-        col.markdown(f'<div class="step"><b>{t}</b><br>{d}</div>', unsafe_allow_html=True)
+             ("6. Live tracker", "How the portfolio is doing at today's prices."),
+             ("7. Possibility", "Simulation of whether the goal can be reached."),
+             ("8. Summary", "Key insights and the Excel download.")]
+    for row in (steps[:4], steps[4:]):
+        sc = st.columns(4)
+        for col, (t, d) in zip(sc, row):
+            col.markdown(f'<div class="step"><b>{t}</b><br>{d}</div>', unsafe_allow_html=True)
+        st.write("")
 
     st.markdown("### Growth path needed to reach the goal")
     mths = np.arange(0, MONTHS + 1)
@@ -446,8 +459,6 @@ with tabs[2]:
     explain("A company must pass all four rules to be a first-choice stock. Change the limits in the left panel "
             "under Stock quality rules.")
     n0 = len(ranked)
-    c1 = int(ranked.T_ROE.sum()); c2 = int((ranked.T_ROE & ranked.T_ROCE).sum())
-    c3 = int((ranked.T_ROE & ranked.T_ROCE & ranked.T_Growth).sum())
     c4 = int(ranked.Screen_Pass.sum())
     rules = pd.DataFrame({
         "Rule": ["ROE", "ROCE", "Sales growth", "Beta"],
@@ -456,14 +467,8 @@ with tabs[2]:
         "Why": ["Earns good profit on shareholders' money", "Earns good profit on all money used",
                 "Growing fast enough for the goal", "Not too jumpy versus the market"],
         "Share passing": [ranked.T_ROE.mean(), ranked.T_ROCE.mean(), ranked.T_Growth.mean(), ranked.T_Beta.mean()]})
-    a, b = st.columns([3, 2])
-    a.dataframe(rules, use_container_width=True, hide_index=True, column_config={
+    st.dataframe(rules, use_container_width=True, hide_index=True, column_config={
         "Share passing": st.column_config.ProgressColumn("Share passing", min_value=0, max_value=1, format="percent")})
-    fig = go.Figure(go.Funnel(y=["All companies", "+ ROE rule", "+ ROCE rule", "+ Growth rule", "+ Beta rule (all 4)"],
-                              x=[n0, c1, c2, c3, c4], textinfo="value+percent initial",
-                              marker=dict(color=[NAVY, BLUE, "#2E7BFF", GREEN, "#00D49C"])))
-    fig.update_layout(height=300, margin=dict(t=10, b=10), title="How many companies survive each rule")
-    b.plotly_chart(fig, use_container_width=True)
     st.markdown(f"<div class='note'><b>{c4} of {n0}</b> companies passed all four rules. If a size group has fewer "
                 "than 5 passers, the best of the rest fill the gap and are flagged with ⚠️ in the Ranking tab.</div>",
                 unsafe_allow_html=True)
@@ -535,8 +540,73 @@ with tabs[4]:
                              "Invested_Rs": "Actual ₹"}).round(2)
     st.dataframe(t, use_container_width=True, hide_index=True)
 
-# ------------------------------------------------------------ 6. POSSIBILITY
+# ------------------------------------------------------------ 6. LIVE TRACKER
 with tabs[5]:
+    st.subheader("Live tracker: how is the portfolio doing now?")
+    explain("Imagine you bought this exact portfolio on the date below, at that day's closing prices. "
+            "This compares today's value with what you put in, with the Nifty 50, and with the pace your goal needs. "
+            "Prices refresh about every 15 minutes.")
+    cA, cB = st.columns([2, 1])
+    inv_date = cA.date_input("Investment date", value=pd.Timestamp("2026-10-09").date(),
+                             max_value=pd.Timestamp.today().date())
+    if cB.button("🔄 Refresh prices now"):
+        st.cache_data.clear()
+    hist = get_history(tuple(port.Ticker), str(inv_date))
+    ok = [t for t in port.Ticker if hist is not None and t in hist.columns and hist[t].notna().any()]
+    if hist is None or hist.empty or "^NSEI" not in hist.columns or not ok:
+        st.warning("Could not fetch live prices right now (the data source may be busy). Try again in a few minutes.")
+    else:
+        hist = hist.ffill()
+        buy, last = hist.iloc[0], hist.iloc[-1]
+        tr = port[port.Ticker.isin(ok)].copy()
+        tr["Buy price"] = tr.Ticker.map(buy)
+        tr["Price now"] = tr.Ticker.map(last)
+        tr["Shares_t"] = (tr.Amount_Rs // tr["Buy price"]).astype(int)
+        tr["Invested"] = tr.Shares_t * tr["Buy price"]
+        tr["Value now"] = tr.Shares_t * tr["Price now"]
+        tr["P&L ₹"] = tr["Value now"] - tr["Invested"]
+        tr["Change %"] = (tr["Price now"] / tr["Buy price"] - 1) * 100
+        cash_t = CAPITAL - tr.Invested.sum()
+        value_now = tr["Value now"].sum() + cash_t
+        pl = value_now - CAPITAL
+        ret = value_now / CAPITAL - 1
+        nifty = float(last["^NSEI"] / buy["^NSEI"] - 1)
+        days = max((hist.index[-1] - hist.index[0]).days, 0)
+        pace_value = CAPITAL * (1 + REQ_LOW) ** (days / 365)
+        c = st.columns(4)
+        c[0].markdown(card("Value now", money(value_now), f"started at {money(CAPITAL)}", BLUE), unsafe_allow_html=True)
+        c[1].markdown(card("Profit / loss", f"{'+' if pl >= 0 else '-'}₹{abs(pl):,.0f}", f"{ret:+.2%} in {days} days",
+                           GREEN if pl >= 0 else RED), unsafe_allow_html=True)
+        c[2].markdown(card("vs Nifty 50", f"{(ret - nifty):+.2%}", f"Nifty moved {nifty:+.2%}",
+                           GREEN if ret >= nifty else RED), unsafe_allow_html=True)
+        c[3].markdown(card("vs goal pace", "Ahead" if value_now >= pace_value else "Behind",
+                           f"pace needs {money(pace_value)} by now", GREEN if value_now >= pace_value else AMBER),
+                      unsafe_allow_html=True)
+        st.write("")
+        series = (hist[ok].mul(tr.set_index("Ticker").Shares_t)).sum(axis=1) + cash_t
+        bench = CAPITAL * hist["^NSEI"] / hist["^NSEI"].iloc[0]
+        goal_line = CAPITAL * (1 + REQ_LOW) ** (((hist.index - hist.index[0]).days) / 365)
+        fig = go.Figure()
+        fig.add_scatter(x=series.index, y=series / 1e7, name="Your portfolio", line=dict(color=BLUE, width=4))
+        fig.add_scatter(x=bench.index, y=bench / 1e7, name="Nifty 50 (same start)", line=dict(color=AMBER, width=3))
+        fig.add_scatter(x=hist.index, y=goal_line / 1e7, name="Pace needed for goal",
+                        line=dict(color=GREEN, width=3, dash="dash"))
+        fig.update_layout(height=400, xaxis_title="Date", yaxis_title="Value (₹ crore)",
+                          legend=dict(orientation="h", y=1.12))
+        st.plotly_chart(fig, use_container_width=True)
+        t = tr[["Company", "Cap_Bucket", "Buy price", "Price now", "Change %", "P&L ₹"]].rename(
+            columns={"Cap_Bucket": "Size"}).sort_values("Change %", ascending=False)
+        t.insert(0, "", np.where(t["Change %"] >= 0, "▲", "▼"))
+        st.dataframe(t.round(2), use_container_width=True, hide_index=True)
+        if len(ok) < len(port):
+            st.caption("No live price found for: " + ", ".join(port[~port.Ticker.isin(ok)].Company) + ".")
+        st.markdown(f"<div class='note'><b>Read this carefully:</b> {days} day(s) of data say almost nothing about "
+                    "whether the strategy works. Check back after several months. Prices come from Yahoo Finance "
+                    "and can lag or be unavailable. This is a simulated tracker, not real trading.</div>",
+                    unsafe_allow_html=True)
+
+# ------------------------------------------------------------ 7. POSSIBILITY
+with tabs[6]:
     st.subheader("Can this portfolio reach the goal?")
     explain("We ran 5,000 possible futures for each scenario. Each future randomly moves stock prices up and down "
             "by the amounts seen historically. The share of futures that end above the goal is the chance of success.")
@@ -580,8 +650,8 @@ with tabs[5]:
                 "The simulation ignores taxes, trading costs and rebalancing, and past performance does not "
                 "guarantee future results.</div>", unsafe_allow_html=True)
 
-# ------------------------------------------------------------ 7. SUMMARY AND INSIGHTS
-with tabs[6]:
+# ------------------------------------------------------------ 8. SUMMARY AND INSIGHTS
+with tabs[7]:
     st.subheader("Summary and key insights")
     st.markdown(f"""<div class="verdict" style="border-color:{vcol}">
     <div style="font-size:1.15rem;font-weight:700">{vicon} Bottom line: reaching {money(TARGET)} in
@@ -616,4 +686,4 @@ with tabs[6]:
                      ).to_excel(xw, sheet_name="Insights", index=False)
     st.download_button("⬇️ Download Excel report", buf.getvalue(), "Portfolio_Report.xlsx",
                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
-    st.caption("Educational tool. Not investment advice. Past performance does not guarantee future results.")   
+    st.caption("Educational tool. Not investment advice. Past performance does not guarantee future results.")
